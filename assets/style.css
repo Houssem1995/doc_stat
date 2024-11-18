@@ -1,0 +1,89 @@
+/* Main layout styling */
+.main {
+    padding: 1rem;
+}
+
+/* Custom header styling */
+.stApp > header {
+    background-color: #f0f2f6;
+}
+
+/* Custom styling for analysis cards */
+.stMarkdown {
+    background-color: white;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+
+/* Custom button styling */
+.stButton > button {
+    width: 100%;
+    border-radius: 0.3rem;
+    background-color: #4CAF50;
+    color: white;
+}
+
+.stButton > button:hover {
+    background-color: #45a049;
+}
+
+/* Custom selectbox styling */
+.stSelectbox > div > div {
+    background-color: white;
+    border-radius: 0.3rem;
+}
+
+/* Custom file uploader styling */
+.stUploader > div {
+    background-color: white;
+    border: 2px dashed #4CAF50;
+    border-radius: 0.5rem;
+    padding: 1rem;
+}
+
+/* Custom tabs styling */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 2rem;
+}
+
+.stTabs [data-baseweb="tab"] {
+    height: 3rem;
+    white-space: pre-wrap;
+    background-color: white;
+    border-radius: 0.5rem 0.5rem 0 0;
+}
+
+/* Results section styling */
+.results-container {
+    background-color: white;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+    margin-top: 1rem;
+}
+
+/* Plot container styling */
+.plot-container {
+    background-color: white;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    margin-top: 1rem;
+}
+
+/* Error message styling */
+.error-message {
+    color: #ff0000;
+    background-color: #ffe6e6;
+    padding: 0.5rem;
+    border-radius: 0.3rem;
+    margin: 0.5rem 0;
+}
+
+/* Success message styling */
+.success-message {
+    color: #4CAF50;
+    background-color: #e8f5e9;
+    padding: 0.5rem;
+    border-radius: 0.3rem;
+    margin: 0.5rem 0;
+} 
