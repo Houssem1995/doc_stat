@@ -21,21 +21,27 @@ class DocStatApp:
         st.set_page_config(page_title="DocStat", layout="wide")
         if "data" not in st.session_state:
             st.session_state.data = None
+        if "categorical_numeric_cols" not in st.session_state:
+            st.session_state.categorical_numeric_cols = []
 
     def get_numeric_columns(self) -> list:
         """Get list of numeric columns from the loaded dataset."""
         if st.session_state.data is not None:
-            return st.session_state.data.select_dtypes(
+            numeric_cols = st.session_state.data.select_dtypes(
                 include=['int64', 'float64']
             ).columns.tolist()
+            # Exclude columns marked as categorical
+            return [col for col in numeric_cols if col not in st.session_state.categorical_numeric_cols]
         return []
 
     def get_categorical_columns(self) -> list:
         """Get list of categorical columns from the loaded dataset."""
         if st.session_state.data is not None:
-            return st.session_state.data.select_dtypes(
+            # Include both native categorical and user-specified categorical columns
+            native_categorical = st.session_state.data.select_dtypes(
                 include=['object', 'category']
             ).columns.tolist()
+            return native_categorical + st.session_state.categorical_numeric_cols
         return []
 
     def _render_correlation_tab(self):
@@ -600,6 +606,18 @@ class DocStatApp:
             if df is not None and DataLoader.validate_data(df):
                 st.session_state.data = df
                 st.success("Data loaded successfully!")
+                
+                # Add categorical column specification
+                st.header("Column Settings")
+                numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+                if numeric_cols:
+                    st.write("Specify numeric columns to treat as categorical:")
+                    st.session_state.categorical_numeric_cols = st.multiselect(
+                        "Select columns",
+                        options=numeric_cols,
+                        default=st.session_state.categorical_numeric_cols,
+                        help="Select numeric columns that should be treated as categorical variables"
+                    )
                 
                 # Display data info
                 st.header("Dataset Info")
