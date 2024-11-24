@@ -13,6 +13,8 @@ class StatTestResult:
     significant: bool
     groups: Dict[str, Any]
     additional_info: Dict = None
+    target: str = None
+    group_var: str = None
 
 class StatisticalAnalyzer:
     @staticmethod
@@ -93,3 +95,70 @@ class StatisticalAnalyzer:
             groups={"contingency": contingency, "expected": expected},
             additional_info={"degrees_of_freedom": dof}
         )
+
+    @staticmethod
+    def batch_two_group_tests(data: pd.DataFrame,
+                             targets: List[str],
+                             groups: List[str]) -> List[StatTestResult]:
+        """Perform two-group tests for multiple targets and grouping variables."""
+        results = []
+        for target in targets:
+            for group in groups:
+                try:
+                    result = StatisticalAnalyzer.perform_two_group_test(
+                        data=data,
+                        target=target,
+                        group=group
+                    )
+                    result.target = target
+                    result.group_var = group
+                    results.append(result)
+                except ValueError as e:
+                    # Skip combinations that don't meet requirements
+                    continue
+        return results
+
+    @staticmethod
+    def batch_multi_group_tests(data: pd.DataFrame,
+                               targets: List[str],
+                               groups: List[str]) -> List[StatTestResult]:
+        """Perform multi-group tests for multiple targets and grouping variables."""
+        results = []
+        for target in targets:
+            for group in groups:
+                try:
+                    result = StatisticalAnalyzer.perform_multi_group_test(
+                        data=data,
+                        target=target,
+                        group=group
+                    )
+                    result.target = target
+                    result.group_var = group
+                    results.append(result)
+                except ValueError as e:
+                    # Skip combinations that don't meet requirements
+                    continue
+        return results
+
+    @staticmethod
+    def batch_chi_square_tests(data: pd.DataFrame,
+                              vars1: List[str],
+                              vars2: List[str]) -> List[StatTestResult]:
+        """Perform chi-square tests for multiple variable combinations."""
+        results = []
+        for var1 in vars1:
+            for var2 in vars2:
+                if var1 != var2:  # Avoid testing variable against itself
+                    try:
+                        result = StatisticalAnalyzer.perform_chi_square_test(
+                            data=data,
+                            var1=var1,
+                            var2=var2
+                        )
+                        result.target = var1
+                        result.group_var = var2
+                        results.append(result)
+                    except ValueError as e:
+                        # Skip combinations that cause errors
+                        continue
+        return results

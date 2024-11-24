@@ -325,58 +325,103 @@ class DocStatApp:
         )
         
         # Variable selection based on test type
-        col1, col2 = st.columns(2)
-        with col1:
-            if "Chi-square" in test_type:
-                var1 = st.selectbox(
-                    "Select First Variable", 
+        if "Chi-square" in test_type:
+            col1, col2 = st.columns(2)
+            with col1:
+                vars1 = st.multiselect(
+                    "Select First Set of Variables", 
                     categorical_cols,
-                    key="stat_var1"
+                    help="Select one or more categorical variables",
+                    key="stat_vars1"
                 )
-            else:
-                var1 = st.selectbox(
-                    "Select Dependent Variable", 
+            
+            with col2:
+                vars2 = st.multiselect(
+                    "Select Second Set of Variables", 
+                    categorical_cols,
+                    help="Select one or more categorical variables",
+                    key="stat_vars2"
+                )
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                target_vars = st.multiselect(
+                    "Select Dependent Variable(s)", 
                     numeric_cols,
-                    key="stat_var1"
+                    help="Select one or more numeric variables to analyze",
+                    key="stat_targets"
+                )
+            
+            with col2:
+                group_vars = st.multiselect(
+                    "Select Grouping Variable(s)", 
+                    categorical_cols,
+                    help="Select one or more categorical variables for grouping",
+                    key="stat_groups"
                 )
         
-        with col2:
-            var2 = st.selectbox(
-                "Select Independent/Grouping Variable", 
-                categorical_cols,
-                key="stat_var2"
-            )
-        
-        if st.button("Perform Statistical Test", key="run_statistical"):
+        if st.button("Perform Statistical Tests", key="run_statistical"):
             try:
-                if "Two Groups" in test_type:
-                    result = StatisticalAnalyzer.perform_two_group_test(
-                        st.session_state.data, var1, var2
+                if "Chi-square" in test_type:
+                    if not vars1 or not vars2:
+                        st.warning("Please select variables for both sets.")
+                        return
+                    
+                    results = StatisticalAnalyzer.batch_chi_square_tests(
+                        st.session_state.data, vars1, vars2
                     )
-                elif "Multiple Groups" in test_type:
-                    result = StatisticalAnalyzer.perform_multi_group_test(
-                        st.session_state.data, var1, var2
+                elif "Two Groups" in test_type:
+                    if not target_vars or not group_vars:
+                        st.warning("Please select both target and grouping variables.")
+                        return
+                    
+                    results = StatisticalAnalyzer.batch_two_group_tests(
+                        st.session_state.data, target_vars, group_vars
                     )
-                else:  # Chi-square
-                    result = StatisticalAnalyzer.perform_chi_square_test(
-                        st.session_state.data, var1, var2
+                else:  # Multiple Groups
+                    if not target_vars or not group_vars:
+                        st.warning("Please select both target and grouping variables.")
+                        return
+                    
+                    results = StatisticalAnalyzer.batch_multi_group_tests(
+                        st.session_state.data, target_vars, group_vars
                     )
                 
                 # Display results
-                st.write(f"### {result.test_name} Results")
-                st.write(f"Statistic: {result.statistic:.4f}")
-                st.write(f"P-value: {result.p_value:.4f}")
-                st.write(f"Significant: {'Yes' if result.significant else 'No'}")
+                if not results:
+                    st.warning("No valid test results were produced. Check your variable selections.")
+                    return
                 
-                # Display plots
-                st.write("### Visualization")
-                create_statistical_plots(result, test_type)
-                
-                # Additional information
-                if result.additional_info:
-                    st.write("### Additional Information")
-                    for key, value in result.additional_info.items():
-                        st.write(f"{key}: {value}")
+                for result in results:
+                    with st.expander(f"Results for {result.target} by {result.group_var}", expanded=True):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write("### Test Results")
+                            st.write(f"**Test**: {result.test_name}")
+                            st.write(f"**Statistic**: {result.statistic:.4f}")
+                            st.write(f"**P-value**: {result.p_value:.4f}")
+                            
+                            if result.significant:
+                                st.success("✅ Significant difference detected")
+                            else:
+                                st.info("ℹ️ No significant difference detected")
+                        
+                        with col2:
+                            st.write("### Group Statistics")
+                            if isinstance(result.groups, dict):
+                                if "contingency" in result.groups:
+                                    # For chi-square tests
+                                    st.write("Contingency Table:")
+                                    st.dataframe(result.groups["contingency"])
+                                else:
+                                    # For other tests
+                                    st.write("Group Statistics:")
+                                    st.dataframe(result.groups)
+                            else:
+                                # For other tests
+                                st.write("Group Statistics:")
+                                st.dataframe(result.groups)
             except Exception as e:
                 st.error(f"Error during statistical analysis: {str(e)}")
                 st.exception(e)
