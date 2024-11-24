@@ -16,6 +16,8 @@ import plotly.graph_objects as go
 from scipy import stats
 import io
 from openpyxl.utils import get_column_letter
+from src.analysis.sensitivity import SensitivityAnalyzer
+from src.analysis.synthetic_control import SyntheticControlAnalyzer
 
 
 class DocStatApp:
@@ -724,6 +726,382 @@ class DocStatApp:
                 if result.indirect_effect_ci[0] * result.indirect_effect_ci[1] > 0:
                     st.success("✓ Significant mediation effect detected")
 
+    def _render_main_content(self):
+        """Render the main content with all analysis tabs."""
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            "Normality Analysis",
+            "Correlation Analysis",
+            "Statistical Tests",
+            "Regression Analysis",
+            "Mediation Analysis",
+            "Sensitivity Analysis",
+            "Synthetic Control"
+        ])
+        
+        with tab1:
+            self._render_normality_tab()
+        with tab2:
+            self._render_correlation_tab()
+        with tab3:
+            self._render_statistical_tab()
+        with tab4:
+            self._render_regression_tab()
+        with tab5:
+            self._render_mediation_tab()
+        with tab6:
+            self._render_sensitivity_tab()
+        with tab7:
+            self._render_synthetic_control_tab()
+
+    def _render_sensitivity_tab(self):
+        """Render the sensitivity analysis tab."""
+        st.header("Sensitivity Analysis")
+        
+        if st.session_state.data is None:
+            st.warning("Please upload a dataset first.")
+            return
+        
+        # Get numeric columns
+        numeric_cols = self.get_numeric_columns()
+        
+        if not numeric_cols:
+            st.warning("No numeric columns found in the dataset.")
+            return
+        
+        # Analysis type selection
+        analysis_type = st.radio(
+            "Select Analysis Type",
+            options=[
+                "Missing Data Impact",
+                "Outlier Impact",
+                "Variable Transformation",
+                "Sample Size Impact"
+            ],
+            help="Choose the type of sensitivity analysis to perform"
+        )
+        
+        # Variable selection
+        target_vars = st.multiselect(
+            "Select Variables for Analysis",
+            options=numeric_cols,
+            help="Select one or more variables to analyze"
+        )
+        
+        if not target_vars:
+            st.warning("Please select at least one variable.")
+            return
+        
+        # Analysis-specific parameters and execution
+        try:
+            analyzer = SensitivityAnalyzer()
+            
+            if analysis_type == "Missing Data Impact":
+                with st.expander("Missing Data Parameters", expanded=True):
+                    missing_percentages = st.slider(
+                        "Missing Data Percentages",
+                        min_value=5,
+                        max_value=50,
+                        value=(10, 30),
+                        step=5,
+                        help="Range of missing data percentages to test"
+                    )
+                    
+                    imputation_methods = st.multiselect(
+                        "Imputation Methods",
+                        options=["Mean", "Median", "Mode", "Linear Interpolation"],
+                        default=["Mean", "Median"],
+                        help="Select methods for imputing missing values"
+                    )
+                    
+                    n_iterations = st.number_input(
+                        "Number of Iterations",
+                        min_value=10,
+                        max_value=1000,
+                        value=100,
+                        step=10,
+                        help="Number of Monte Carlo iterations"
+                    )
+                
+                if st.button("Run Analysis"):
+                    with st.spinner("Running missing data analysis..."):
+                        result = analyzer.analyze_missing_data_impact(
+                            st.session_state.data,
+                            target_vars,
+                            missing_percentages,
+                            imputation_methods,
+                            n_iterations
+                        )
+                        analyzer.create_sensitivity_plots(result)
+                        
+                        # Download results
+                        csv = result.results_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download Results",
+                            data=csv,
+                            file_name="missing_data_impact_results.csv",
+                            mime="text/csv"
+                        )
+            
+            elif analysis_type == "Outlier Impact":
+                with st.expander("Outlier Parameters", expanded=True):
+                    outlier_methods = st.multiselect(
+                        "Outlier Detection Methods",
+                        options=["Z-Score", "IQR"],
+                        default=["Z-Score", "IQR"],
+                        help="Select methods for detecting outliers"
+                    )
+                    
+                    treatment_methods = st.multiselect(
+                        "Outlier Treatment Methods",
+                        options=["Remove", "Winsorize", "Cap"],
+                        default=["Remove", "Winsorize"],
+                        help="Select methods for treating outliers"
+                    )
+                
+                if st.button("Run Analysis"):
+                    with st.spinner("Running outlier analysis..."):
+                        result = analyzer.analyze_outlier_impact(
+                            st.session_state.data,
+                            target_vars,
+                            outlier_methods,
+                            treatment_methods
+                        )
+                        analyzer.create_sensitivity_plots(result)
+                        
+                        # Download results
+                        csv = result.results_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download Results",
+                            data=csv,
+                            file_name="outlier_impact_results.csv",
+                            mime="text/csv"
+                        )
+            
+            elif analysis_type == "Variable Transformation":
+                with st.expander("Transformation Parameters", expanded=True):
+                    transformations = st.multiselect(
+                        "Transformation Methods",
+                        options=["Log", "Square Root", "Box-Cox", "Yeo-Johnson"],
+                        default=["Log", "Square Root"],
+                        help="Select transformation methods to test"
+                    )
+                    
+                    metrics = st.multiselect(
+                        "Evaluation Metrics",
+                        options=["Normality", "Skewness", "Kurtosis"],
+                        default=["Normality", "Skewness"],
+                        help="Select metrics to evaluate transformations"
+                    )
+                
+                if st.button("Run Analysis"):
+                    with st.spinner("Running transformation analysis..."):
+                        result = analyzer.analyze_transformation_impact(
+                            st.session_state.data,
+                            target_vars,
+                            transformations,
+                            metrics
+                        )
+                        analyzer.create_sensitivity_plots(result)
+                        
+                        # Download results
+                        csv = result.results_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download Results",
+                            data=csv,
+                            file_name="transformation_impact_results.csv",
+                            mime="text/csv"
+                        )
+            
+            else:  # Sample Size Impact
+                with st.expander("Sample Size Parameters", expanded=True):
+                    sample_sizes = st.slider(
+                        "Sample Size Percentages",
+                        min_value=10,
+                        max_value=90,
+                        value=(30, 70),
+                        step=10,
+                        help="Range of sample sizes to test (% of original data)"
+                    )
+                    
+                    n_samples = st.number_input(
+                        "Number of Samples per Size",
+                        min_value=10,
+                        max_value=1000,
+                        value=100,
+                        step=10,
+                        help="Number of random samples to generate for each size"
+                    )
+                
+                if st.button("Run Analysis"):
+                    with st.spinner("Running sample size analysis..."):
+                        result = analyzer.analyze_sample_size_impact(
+                            st.session_state.data,
+                            target_vars,
+                            sample_sizes,
+                            n_samples
+                        )
+                        analyzer.create_sensitivity_plots(result)
+                        
+                        # Download results
+                        csv = result.results_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download Results",
+                            data=csv,
+                            file_name="sample_size_impact_results.csv",
+                            mime="text/csv"
+                        )
+            
+            # Display additional metrics if available
+            if 'result' in locals() and result.metrics:
+                st.write("### Additional Metrics")
+                for key, value in result.metrics.items():
+                    st.write(f"**{key.replace('_', ' ').title()}:** {value}")
+        
+        except Exception as e:
+            st.error(f"Error during sensitivity analysis: {str(e)}")
+            st.exception(e)
+
+    def _render_synthetic_control_tab(self):
+        """Render the synthetic control analysis tab."""
+        st.header("Synthetic Control Analysis")
+        
+        if st.session_state.data is None:
+            st.warning("Please upload a dataset first.")
+            return
+        
+        # Get columns by type
+        numeric_cols = self.get_numeric_columns()
+        categorical_cols = self.get_categorical_columns()
+        
+        if not numeric_cols or not categorical_cols:
+            st.warning("Dataset must contain both numeric and categorical columns.")
+            return
+        
+        # Add help text
+        st.info("""
+            Synthetic Control Analysis requires:
+            1. A binary treatment variable (0 for control, 1 for treated)
+            2. A numeric outcome variable
+            3. A time variable
+            4. Pre-treatment and post-treatment periods
+        """)
+        
+        # Parameter selection
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            treatment_var = st.selectbox(
+                "Treatment Variable (0/1)",
+                options=categorical_cols,
+                help="Binary variable indicating treatment status"
+            )
+            
+            outcome_var = st.selectbox(
+                "Outcome Variable",
+                options=numeric_cols,
+                help="Variable to analyze treatment effect"
+            )
+        
+        with col2:
+            time_var = st.selectbox(
+                "Time Variable",
+                options=numeric_cols,
+                help="Variable indicating time periods"
+            )
+        
+        # Only show treatment time if time variable is selected
+        if time_var:
+            treatment_time = st.number_input(
+                "Treatment Time",
+                min_value=float(st.session_state.data[time_var].min()),
+                max_value=float(st.session_state.data[time_var].max()),
+                value=float(st.session_state.data[time_var].median()),
+                help="Time point when treatment occurred"
+            )
+            
+            # Optional covariates
+            covariates = st.multiselect(
+                "Additional Covariates (Optional)",
+                options=[col for col in numeric_cols if col not in [outcome_var, time_var]],
+                help="Additional variables to improve matching"
+            )
+            
+            if st.button("Run Synthetic Control Analysis"):
+                try:
+                    # Validate treatment variable
+                    if st.session_state.data[treatment_var].nunique() != 2:
+                        st.error(f"Treatment variable must be binary (0/1). Found {st.session_state.data[treatment_var].nunique()} unique values.")
+                        return
+                    
+                    # Validate time periods
+                    pre_period = st.session_state.data[st.session_state.data[time_var] < treatment_time]
+                    post_period = st.session_state.data[st.session_state.data[time_var] >= treatment_time]
+                    
+                    if len(pre_period) == 0:
+                        st.error("No pre-treatment periods found.")
+                        return
+                    if len(post_period) == 0:
+                        st.error("No post-treatment periods found.")
+                        return
+                    
+                    with st.spinner("Running synthetic control analysis..."):
+                        analyzer = SyntheticControlAnalyzer()
+                        result = analyzer.perform_analysis(
+                            data=st.session_state.data,
+                            treatment_var=treatment_var,
+                            outcome_var=outcome_var,
+                            time_var=time_var,
+                            treatment_time=treatment_time,
+                            covariates=covariates if covariates else None
+                        )
+                        
+                        # Display results
+                        st.subheader("Results")
+                        
+                        # Key metrics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Treatment Effect", f"{result.treatment_effect:.4f}")
+                        with col2:
+                            st.metric("Pre-treatment RMSE", f"{result.pre_rmse:.4f}")
+                        with col3:
+                            st.metric("R-squared", f"{result.metrics['r_squared']:.4f}")
+                        
+                        # Plots
+                        st.subheader("Visualizations")
+                        analyzer.create_plots(result)
+                        
+                        # Detailed results in expander
+                        with st.expander("Detailed Results", expanded=False):
+                            st.write("### Unit Weights")
+                            weights_df = pd.DataFrame({
+                                'Control Unit': range(len(result.weights)),
+                                'Weight': result.weights
+                            })
+                            weights_df = weights_df[weights_df['Weight'] > 0.001]  # Show only significant weights
+                            st.dataframe(weights_df)
+                            
+                            # Download results
+                            results_dict = {
+                                'time': result.time_values,
+                                'treated': result.treated_values,
+                                'synthetic': result.synthetic_values,
+                                'gap': result.treated_values - result.synthetic_values
+                            }
+                            results_df = pd.DataFrame(results_dict)
+                            
+                            csv = results_df.to_csv(index=False)
+                            st.download_button(
+                                label="Download Results",
+                                data=csv,
+                                file_name="synthetic_control_results.csv",
+                                mime="text/csv"
+                            )
+                
+                except Exception as e:
+                    st.error(f"Error during synthetic control analysis: {str(e)}")
+                    st.exception(e)
+
     def run(self):
         st.title("DocStat: Statistical Analysis Tool")
         
@@ -769,34 +1147,6 @@ class DocStatApp:
                 categorical_cols = self.get_categorical_columns()
                 st.write("Numeric columns:", len(numeric_cols))
                 st.write("Categorical columns:", len(categorical_cols))
-
-    def _render_main_content(self):
-        """Render the main content with all analysis tabs."""
-        
-        # Create tabs for different analyses
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "Normality Analysis",
-            "Correlation Analysis",
-            "Statistical Tests",
-            "Regression Analysis",
-            "Mediation Analysis"
-        ])
-        
-        # Render content for each tab
-        with tab1:
-            self._render_normality_tab()
-        
-        with tab2:
-            self._render_correlation_tab()
-        
-        with tab3:
-            self._render_statistical_tab()
-        
-        with tab4:
-            self._render_regression_tab()
-        
-        with tab5:
-            self._render_mediation_tab()
 
 
 if __name__ == "__main__":
