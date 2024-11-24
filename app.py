@@ -9,11 +9,15 @@ from src.visualization.correlation_plots import create_correlation_plots
 from src.visualization.statistical_plots import create_statistical_plots
 from config.settings import TEST_TYPES
 from src.analysis.regression import RegressionAnalyzer
-from src.analysis.mediation import MediationAnalyzer
+from src.analysis.mediation import MediationAnalyzer, MediationMethod, MediationResult
 import plotly.express as px
 import numpy as np
 import plotly.graph_objects as go
 from scipy import stats
+import io
+from openpyxl.utils import get_column_letter
+from src.analysis.sensitivity import SensitivityAnalyzer
+from src.analysis.synthetic_control import SyntheticControlAnalyzer
 
 
 class DocStatApp:
@@ -323,58 +327,103 @@ class DocStatApp:
         )
         
         # Variable selection based on test type
-        col1, col2 = st.columns(2)
-        with col1:
-            if "Chi-square" in test_type:
-                var1 = st.selectbox(
-                    "Select First Variable", 
+        if "Chi-square" in test_type:
+            col1, col2 = st.columns(2)
+            with col1:
+                vars1 = st.multiselect(
+                    "Select First Set of Variables", 
                     categorical_cols,
-                    key="stat_var1"
+                    help="Select one or more categorical variables",
+                    key="stat_vars1"
                 )
-            else:
-                var1 = st.selectbox(
-                    "Select Dependent Variable", 
+            
+            with col2:
+                vars2 = st.multiselect(
+                    "Select Second Set of Variables", 
+                    categorical_cols,
+                    help="Select one or more categorical variables",
+                    key="stat_vars2"
+                )
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                target_vars = st.multiselect(
+                    "Select Dependent Variable(s)", 
                     numeric_cols,
-                    key="stat_var1"
+                    help="Select one or more numeric variables to analyze",
+                    key="stat_targets"
+                )
+            
+            with col2:
+                group_vars = st.multiselect(
+                    "Select Grouping Variable(s)", 
+                    categorical_cols,
+                    help="Select one or more categorical variables for grouping",
+                    key="stat_groups"
                 )
         
-        with col2:
-            var2 = st.selectbox(
-                "Select Independent/Grouping Variable", 
-                categorical_cols,
-                key="stat_var2"
-            )
-        
-        if st.button("Perform Statistical Test", key="run_statistical"):
+        if st.button("Perform Statistical Tests", key="run_statistical"):
             try:
-                if "Two Groups" in test_type:
-                    result = StatisticalAnalyzer.perform_two_group_test(
-                        st.session_state.data, var1, var2
+                if "Chi-square" in test_type:
+                    if not vars1 or not vars2:
+                        st.warning("Please select variables for both sets.")
+                        return
+                    
+                    results = StatisticalAnalyzer.batch_chi_square_tests(
+                        st.session_state.data, vars1, vars2
                     )
-                elif "Multiple Groups" in test_type:
-                    result = StatisticalAnalyzer.perform_multi_group_test(
-                        st.session_state.data, var1, var2
+                elif "Two Groups" in test_type:
+                    if not target_vars or not group_vars:
+                        st.warning("Please select both target and grouping variables.")
+                        return
+                    
+                    results = StatisticalAnalyzer.batch_two_group_tests(
+                        st.session_state.data, target_vars, group_vars
                     )
-                else:  # Chi-square
-                    result = StatisticalAnalyzer.perform_chi_square_test(
-                        st.session_state.data, var1, var2
+                else:  # Multiple Groups
+                    if not target_vars or not group_vars:
+                        st.warning("Please select both target and grouping variables.")
+                        return
+                    
+                    results = StatisticalAnalyzer.batch_multi_group_tests(
+                        st.session_state.data, target_vars, group_vars
                     )
                 
                 # Display results
-                st.write(f"### {result.test_name} Results")
-                st.write(f"Statistic: {result.statistic:.4f}")
-                st.write(f"P-value: {result.p_value:.4f}")
-                st.write(f"Significant: {'Yes' if result.significant else 'No'}")
+                if not results:
+                    st.warning("No valid test results were produced. Check your variable selections.")
+                    return
                 
-                # Display plots
-                st.write("### Visualization")
-                create_statistical_plots(result, test_type)
-                
-                # Additional information
-                if result.additional_info:
-                    st.write("### Additional Information")
-                    for key, value in result.additional_info.items():
-                        st.write(f"{key}: {value}")
+                for result in results:
+                    with st.expander(f"Results for {result.target} by {result.group_var}", expanded=True):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write("### Test Results")
+                            st.write(f"**Test**: {result.test_name}")
+                            st.write(f"**Statistic**: {result.statistic:.4f}")
+                            st.write(f"**P-value**: {result.p_value:.4f}")
+                            
+                            if result.significant:
+                                st.success("✅ Significant difference detected")
+                            else:
+                                st.info("ℹ️ No significant difference detected")
+                        
+                        with col2:
+                            st.write("### Group Statistics")
+                            if isinstance(result.groups, dict):
+                                if "contingency" in result.groups:
+                                    # For chi-square tests
+                                    st.write("Contingency Table:")
+                                    st.dataframe(result.groups["contingency"])
+                                else:
+                                    # For other tests
+                                    st.write("Group Statistics:")
+                                    st.dataframe(result.groups)
+                            else:
+                                # For other tests
+                                st.write("Group Statistics:")
+                                st.dataframe(result.groups)
             except Exception as e:
                 st.error(f"Error during statistical analysis: {str(e)}")
                 st.exception(e)
@@ -488,7 +537,225 @@ class DocStatApp:
                 st.exception(e)
 
     def _render_mediation_tab(self):
-        st.header("Mediation Analysis")
+        """Render the mediation analysis section."""
+        st.header("🔄 Mediation Analysis")
+        
+        if st.session_state.data is None:
+            st.warning("Please upload a dataset first.")
+            return
+        
+        # Method selection with detailed information
+        method = st.selectbox(
+            "Select Analysis Method",
+            options=[method.value for method in MediationMethod],
+            help="Choose which statistical library to use for the mediation analysis"
+        )
+
+        # Variable selection
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            independent_vars = st.multiselect(
+                "Independent Variable(s)",
+                options=st.session_state.data.columns.tolist(),
+                help="Select independent variable(s)"
+            )
+        
+        with col2:
+            mediator = st.selectbox(
+                "Mediator Variable",
+                options=st.session_state.data.columns.tolist(),
+                help="Select the mediator variable"
+            )
+        
+        with col3:
+            dependent_var = st.selectbox(
+                "Dependent Variable",
+                options=st.session_state.data.columns.tolist(),
+                help="Select the dependent variable"
+            )
+
+        # Analysis parameters
+        with st.expander("Advanced Settings", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                confidence_level = st.slider(
+                    "Confidence Level",
+                    min_value=0.8,
+                    max_value=0.99,
+                    value=0.95,
+                    step=0.01,
+                    help="Set the confidence level for the analysis"
+                )
+            
+            with col2:
+                n_bootstrap = st.number_input(
+                    "Bootstrap Samples",
+                    min_value=1000,
+                    max_value=10000,
+                    value=5000,
+                    step=1000,
+                    help="Set the number of bootstrap samples"
+                )
+
+        # After displaying results, add download options
+        def create_mediation_report(results: dict[str, MediationResult]) -> pd.DataFrame:
+            """Create a DataFrame with mediation analysis results."""
+            records = []
+            for iv, result in results.items():
+                record = {
+                    'Independent Variable': iv,
+                    'Method': result.method,
+                    'Total Effect': result.total_effect,
+                    'Direct Effect': result.direct_effect,
+                    'Indirect Effect': result.indirect_effect,
+                    'Total Effect p-value': result.total_effect_p,
+                    'Direct Effect p-value': result.direct_effect_p,
+                    'Indirect Effect CI Lower': result.indirect_effect_ci[0],
+                    'Indirect Effect CI Upper': result.indirect_effect_ci[1],
+                    'Proportion Mediated': result.proportion_mediated,
+                    'Sobel Statistic': result.sobel_statistic,
+                    'Sobel p-value': result.sobel_p
+                }
+                records.append(record)
+            return pd.DataFrame(records)
+
+        def download_results(results: dict[str, MediationResult]):
+            """Create download buttons for results in different formats."""
+            if not results:
+                return
+
+            st.subheader("📥 Download Results")
+            
+            # Create DataFrame
+            df_results = create_mediation_report(results)
+            
+            col1, col2 = st.columns(2)
+            
+            # CSV download
+            with col1:
+                csv = df_results.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name="mediation_analysis_results.csv",
+                    mime="text/csv",
+                    help="Download the results as a CSV file"
+                )
+            
+            # Excel download
+            with col2:
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    df_results.to_excel(writer, sheet_name='Mediation Results', index=False)
+                    
+                    # Auto-adjust column widths
+                    worksheet = writer.sheets['Mediation Results']
+                    for idx, col in enumerate(df_results.columns):
+                        max_length = max(
+                            df_results[col].astype(str).apply(len).max(),
+                            len(str(col))
+                        ) + 2
+                        worksheet.column_dimensions[get_column_letter(idx + 1)].width = max_length
+                
+                excel_data = buffer.getvalue()
+                st.download_button(
+                    label="Download Excel",
+                    data=excel_data,
+                    file_name="mediation_analysis_results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="Download the results as an Excel file"
+                )
+
+        # Run analysis button
+        if st.button("Run Mediation Analysis", type="primary"):
+            if not independent_vars or not mediator or not dependent_var:
+                st.warning("Please select all required variables.")
+                return
+            
+            try:
+                with st.spinner("Running mediation analysis..."):
+                    results = MediationAnalyzer.perform_multiple_mediations(
+                        data=st.session_state.data,
+                        independent_vars=independent_vars,
+                        mediator=mediator,
+                        dependent_var=dependent_var,
+                        method=MediationMethod(method),
+                        confidence_level=confidence_level,
+                        n_bootstrap=n_bootstrap
+                    )
+                    self._display_mediation_results(results)
+                    
+                    # Add download section
+                    download_results(results)
+                    
+            except Exception as e:
+                st.error(f"An error occurred during the analysis: {str(e)}")
+                st.exception(e)
+
+    def _display_mediation_results(self, results: dict[str, MediationResult]):
+        """Display the mediation analysis results in a formatted way."""
+        st.subheader("📊 Results")
+        
+        for iv, result in results.items():
+            with st.expander(f"Results for {iv}", expanded=True):
+                # Create three columns for organized display
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.markdown("#### Effect Sizes")
+                    st.write(f"Total Effect (c): {result.total_effect:.4f}")
+                    st.write(f"Direct Effect (c'): {result.direct_effect:.4f}")
+                    st.write(f"Indirect Effect (ab): {result.indirect_effect:.4f}")
+                
+                with col2:
+                    st.markdown("#### Statistical Tests")
+                    st.write(f"Total Effect p-value: {result.total_effect_p:.4f}")
+                    st.write(f"Direct Effect p-value: {result.direct_effect_p:.4f}")
+                    st.write(f"Sobel Test p-value: {result.sobel_p:.4f}")
+                
+                with col3:
+                    st.markdown("#### Additional Metrics")
+                    st.write(f"Proportion Mediated: {result.proportion_mediated:.2%}")
+                    st.write("Indirect Effect 95% CI:")
+                    st.write(f"- Lower: {result.indirect_effect_ci[0]:.4f}")
+                    st.write(f"- Upper: {result.indirect_effect_ci[1]:.4f}")
+                
+                # Add significance indicators
+                if result.total_effect_p < 0.05:
+                    st.success("✓ Significant total effect detected")
+                if result.indirect_effect_ci[0] * result.indirect_effect_ci[1] > 0:
+                    st.success("✓ Significant mediation effect detected")
+
+    def _render_main_content(self):
+        """Render the main content with all analysis tabs."""
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            "Normality Analysis",
+            "Correlation Analysis",
+            "Statistical Tests",
+            "Regression Analysis",
+            "Mediation Analysis",
+            "Sensitivity Analysis",
+            "Synthetic Control"
+        ])
+        
+        with tab1:
+            self._render_normality_tab()
+        with tab2:
+            self._render_correlation_tab()
+        with tab3:
+            self._render_statistical_tab()
+        with tab4:
+            self._render_regression_tab()
+        with tab5:
+            self._render_mediation_tab()
+        with tab6:
+            self._render_sensitivity_tab()
+        with tab7:
+            self._render_synthetic_control_tab()
+
+    def _render_sensitivity_tab(self):
+        """Render the sensitivity analysis tab."""
+        st.header("Sensitivity Analysis")
         
         if st.session_state.data is None:
             st.warning("Please upload a dataset first.")
@@ -497,92 +764,343 @@ class DocStatApp:
         # Get numeric columns
         numeric_cols = self.get_numeric_columns()
         
-        if len(numeric_cols) < 3:
-            st.warning("Mediation analysis requires at least 3 numeric variables.")
+        if not numeric_cols:
+            st.warning("No numeric columns found in the dataset.")
             return
         
+        # Analysis type selection
+        analysis_type = st.radio(
+            "Select Analysis Type",
+            options=[
+                "Missing Data Impact",
+                "Outlier Impact",
+                "Variable Transformation",
+                "Sample Size Impact"
+            ],
+            help="Choose the type of sensitivity analysis to perform"
+        )
+        
         # Variable selection
-        col1, col2, col3 = st.columns(3)
+        target_vars = st.multiselect(
+            "Select Variables for Analysis",
+            options=numeric_cols,
+            help="Select one or more variables to analyze"
+        )
+        
+        if not target_vars:
+            st.warning("Please select at least one variable.")
+            return
+        
+        # Analysis-specific parameters and execution
+        try:
+            analyzer = SensitivityAnalyzer()
+            
+            if analysis_type == "Missing Data Impact":
+                with st.expander("Missing Data Parameters", expanded=True):
+                    missing_percentages = st.slider(
+                        "Missing Data Percentages",
+                        min_value=5,
+                        max_value=50,
+                        value=(10, 30),
+                        step=5,
+                        help="Range of missing data percentages to test"
+                    )
+                    
+                    imputation_methods = st.multiselect(
+                        "Imputation Methods",
+                        options=["Mean", "Median", "Mode", "Linear Interpolation"],
+                        default=["Mean", "Median"],
+                        help="Select methods for imputing missing values"
+                    )
+                    
+                    n_iterations = st.number_input(
+                        "Number of Iterations",
+                        min_value=10,
+                        max_value=1000,
+                        value=100,
+                        step=10,
+                        help="Number of Monte Carlo iterations"
+                    )
+                
+                if st.button("Run Analysis"):
+                    with st.spinner("Running missing data analysis..."):
+                        result = analyzer.analyze_missing_data_impact(
+                            st.session_state.data,
+                            target_vars,
+                            missing_percentages,
+                            imputation_methods,
+                            n_iterations
+                        )
+                        analyzer.create_sensitivity_plots(result)
+                        
+                        # Download results
+                        csv = result.results_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download Results",
+                            data=csv,
+                            file_name="missing_data_impact_results.csv",
+                            mime="text/csv"
+                        )
+            
+            elif analysis_type == "Outlier Impact":
+                with st.expander("Outlier Parameters", expanded=True):
+                    outlier_methods = st.multiselect(
+                        "Outlier Detection Methods",
+                        options=["Z-Score", "IQR"],
+                        default=["Z-Score", "IQR"],
+                        help="Select methods for detecting outliers"
+                    )
+                    
+                    treatment_methods = st.multiselect(
+                        "Outlier Treatment Methods",
+                        options=["Remove", "Winsorize", "Cap"],
+                        default=["Remove", "Winsorize"],
+                        help="Select methods for treating outliers"
+                    )
+                
+                if st.button("Run Analysis"):
+                    with st.spinner("Running outlier analysis..."):
+                        result = analyzer.analyze_outlier_impact(
+                            st.session_state.data,
+                            target_vars,
+                            outlier_methods,
+                            treatment_methods
+                        )
+                        analyzer.create_sensitivity_plots(result)
+                        
+                        # Download results
+                        csv = result.results_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download Results",
+                            data=csv,
+                            file_name="outlier_impact_results.csv",
+                            mime="text/csv"
+                        )
+            
+            elif analysis_type == "Variable Transformation":
+                with st.expander("Transformation Parameters", expanded=True):
+                    transformations = st.multiselect(
+                        "Transformation Methods",
+                        options=["Log", "Square Root", "Box-Cox", "Yeo-Johnson"],
+                        default=["Log", "Square Root"],
+                        help="Select transformation methods to test"
+                    )
+                    
+                    metrics = st.multiselect(
+                        "Evaluation Metrics",
+                        options=["Normality", "Skewness", "Kurtosis"],
+                        default=["Normality", "Skewness"],
+                        help="Select metrics to evaluate transformations"
+                    )
+                
+                if st.button("Run Analysis"):
+                    with st.spinner("Running transformation analysis..."):
+                        result = analyzer.analyze_transformation_impact(
+                            st.session_state.data,
+                            target_vars,
+                            transformations,
+                            metrics
+                        )
+                        analyzer.create_sensitivity_plots(result)
+                        
+                        # Download results
+                        csv = result.results_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download Results",
+                            data=csv,
+                            file_name="transformation_impact_results.csv",
+                            mime="text/csv"
+                        )
+            
+            else:  # Sample Size Impact
+                with st.expander("Sample Size Parameters", expanded=True):
+                    sample_sizes = st.slider(
+                        "Sample Size Percentages",
+                        min_value=10,
+                        max_value=90,
+                        value=(30, 70),
+                        step=10,
+                        help="Range of sample sizes to test (% of original data)"
+                    )
+                    
+                    n_samples = st.number_input(
+                        "Number of Samples per Size",
+                        min_value=10,
+                        max_value=1000,
+                        value=100,
+                        step=10,
+                        help="Number of random samples to generate for each size"
+                    )
+                
+                if st.button("Run Analysis"):
+                    with st.spinner("Running sample size analysis..."):
+                        result = analyzer.analyze_sample_size_impact(
+                            st.session_state.data,
+                            target_vars,
+                            sample_sizes,
+                            n_samples
+                        )
+                        analyzer.create_sensitivity_plots(result)
+                        
+                        # Download results
+                        csv = result.results_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download Results",
+                            data=csv,
+                            file_name="sample_size_impact_results.csv",
+                            mime="text/csv"
+                        )
+            
+            # Display additional metrics if available
+            if 'result' in locals() and result.metrics:
+                st.write("### Additional Metrics")
+                for key, value in result.metrics.items():
+                    st.write(f"**{key.replace('_', ' ').title()}:** {value}")
+        
+        except Exception as e:
+            st.error(f"Error during sensitivity analysis: {str(e)}")
+            st.exception(e)
+
+    def _render_synthetic_control_tab(self):
+        """Render the synthetic control analysis tab."""
+        st.header("Synthetic Control Analysis")
+        
+        if st.session_state.data is None:
+            st.warning("Please upload a dataset first.")
+            return
+        
+        # Get columns by type
+        numeric_cols = self.get_numeric_columns()
+        categorical_cols = self.get_categorical_columns()
+        
+        if not numeric_cols or not categorical_cols:
+            st.warning("Dataset must contain both numeric and categorical columns.")
+            return
+        
+        # Add help text
+        st.info("""
+            Synthetic Control Analysis requires:
+            1. A binary treatment variable (0 for control, 1 for treated)
+            2. A numeric outcome variable
+            3. A time variable
+            4. Pre-treatment and post-treatment periods
+        """)
+        
+        # Parameter selection
+        col1, col2 = st.columns(2)
         
         with col1:
-            independent_var = st.selectbox(
-                "Select Independent Variable (X)",
+            treatment_var = st.selectbox(
+                "Treatment Variable (0/1)",
+                options=categorical_cols,
+                help="Binary variable indicating treatment status"
+            )
+            
+            outcome_var = st.selectbox(
+                "Outcome Variable",
                 options=numeric_cols,
-                key="med_independent"
+                help="Variable to analyze treatment effect"
             )
         
         with col2:
-            mediator = st.selectbox(
-                "Select Mediator (M)",
-                options=[col for col in numeric_cols if col != independent_var],
-                key="med_mediator"
+            time_var = st.selectbox(
+                "Time Variable",
+                options=numeric_cols,
+                help="Variable indicating time periods"
             )
         
-        with col3:
-            dependent_var = st.selectbox(
-                "Select Dependent Variable (Y)",
-                options=[col for col in numeric_cols if col not in [independent_var, mediator]],
-                key="med_dependent"
-            )
-        
-        # Analysis options
-        with st.expander("Mediation Options", expanded=False):
-            confidence_level = st.slider(
-                "Confidence Level",
-                min_value=0.80,
-                max_value=0.99,
-                value=0.95,
-                step=0.01,
-                help="Confidence level for bootstrap intervals"
+        # Only show treatment time if time variable is selected
+        if time_var:
+            treatment_time = st.number_input(
+                "Treatment Time",
+                min_value=float(st.session_state.data[time_var].min()),
+                max_value=float(st.session_state.data[time_var].max()),
+                value=float(st.session_state.data[time_var].median()),
+                help="Time point when treatment occurred"
             )
             
-            n_bootstrap = st.number_input(
-                "Number of Bootstrap Samples",
-                min_value=1000,
-                max_value=10000,
-                value=5000,
-                step=1000,
-                help="Number of bootstrap samples for confidence intervals"
+            # Optional covariates
+            covariates = st.multiselect(
+                "Additional Covariates (Optional)",
+                options=[col for col in numeric_cols if col not in [outcome_var, time_var]],
+                help="Additional variables to improve matching"
             )
-        
-        if st.button("Run Mediation Analysis", key="run_mediation"):
-            try:
-                results = MediationAnalyzer.perform_mediation(
-                    data=st.session_state.data,
-                    independent_var=independent_var,
-                    mediator=mediator,
-                    dependent_var=dependent_var,
-                    confidence_level=confidence_level,
-                    n_bootstrap=n_bootstrap
-                )
+            
+            if st.button("Run Synthetic Control Analysis"):
+                try:
+                    # Validate treatment variable
+                    if st.session_state.data[treatment_var].nunique() != 2:
+                        st.error(f"Treatment variable must be binary (0/1). Found {st.session_state.data[treatment_var].nunique()} unique values.")
+                        return
+                    
+                    # Validate time periods
+                    pre_period = st.session_state.data[st.session_state.data[time_var] < treatment_time]
+                    post_period = st.session_state.data[st.session_state.data[time_var] >= treatment_time]
+                    
+                    if len(pre_period) == 0:
+                        st.error("No pre-treatment periods found.")
+                        return
+                    if len(post_period) == 0:
+                        st.error("No post-treatment periods found.")
+                        return
+                    
+                    with st.spinner("Running synthetic control analysis..."):
+                        analyzer = SyntheticControlAnalyzer()
+                        result = analyzer.perform_analysis(
+                            data=st.session_state.data,
+                            treatment_var=treatment_var,
+                            outcome_var=outcome_var,
+                            time_var=time_var,
+                            treatment_time=treatment_time,
+                            covariates=covariates if covariates else None
+                        )
+                        
+                        # Display results
+                        st.subheader("Results")
+                        
+                        # Key metrics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Treatment Effect", f"{result.treatment_effect:.4f}")
+                        with col2:
+                            st.metric("Pre-treatment RMSE", f"{result.pre_rmse:.4f}")
+                        with col3:
+                            st.metric("R-squared", f"{result.metrics['r_squared']:.4f}")
+                        
+                        # Plots
+                        st.subheader("Visualizations")
+                        analyzer.create_plots(result)
+                        
+                        # Detailed results in expander
+                        with st.expander("Detailed Results", expanded=False):
+                            st.write("### Unit Weights")
+                            weights_df = pd.DataFrame({
+                                'Control Unit': range(len(result.weights)),
+                                'Weight': result.weights
+                            })
+                            weights_df = weights_df[weights_df['Weight'] > 0.001]  # Show only significant weights
+                            st.dataframe(weights_df)
+                            
+                            # Download results
+                            results_dict = {
+                                'time': result.time_values,
+                                'treated': result.treated_values,
+                                'synthetic': result.synthetic_values,
+                                'gap': result.treated_values - result.synthetic_values
+                            }
+                            results_df = pd.DataFrame(results_dict)
+                            
+                            csv = results_df.to_csv(index=False)
+                            st.download_button(
+                                label="Download Results",
+                                data=csv,
+                                file_name="synthetic_control_results.csv",
+                                mime="text/csv"
+                            )
                 
-                # Display results
-                st.write("### Mediation Analysis Results")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**Effect Sizes**")
-                    st.write(f"Total Effect (c): {results.total_effect:.3f}")
-                    st.write(f"Direct Effect (c'): {results.direct_effect:.3f}")
-                    st.write(f"Indirect Effect (ab): {results.indirect_effect:.3f}")
-                
-                with col2:
-                    st.write("**Statistical Tests**")
-                    st.write(f"Total Effect p-value: {results.total_effect_p:.3f}")
-                    st.write(f"Direct Effect p-value: {results.direct_effect_p:.3f}")
-                    st.write(f"Sobel Test p-value: {results.sobel_p:.3f}")
-                
-                st.write("### Bootstrap Results")
-                st.write(f"Indirect Effect 95% CI: [{results.indirect_effect_ci[0]:.3f}, {results.indirect_effect_ci[1]:.3f}]")
-                st.write(f"Proportion Mediated: {results.proportion_mediated:.1%}")
-                
-                # Create path diagram
-                st.write("### Path Diagram")
-                # Add visualization of the mediation model here
-                
-            except Exception as e:
-                st.error(f"Error during mediation analysis: {str(e)}")
-                st.exception(e)
+                except Exception as e:
+                    st.error(f"Error during synthetic control analysis: {str(e)}")
+                    st.exception(e)
 
     def run(self):
         st.title("DocStat: Statistical Analysis Tool")
@@ -629,34 +1147,6 @@ class DocStatApp:
                 categorical_cols = self.get_categorical_columns()
                 st.write("Numeric columns:", len(numeric_cols))
                 st.write("Categorical columns:", len(categorical_cols))
-
-    def _render_main_content(self):
-        """Render the main content with all analysis tabs."""
-        
-        # Create tabs for different analyses
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "Normality Analysis",
-            "Correlation Analysis",
-            "Statistical Tests",
-            "Regression Analysis",
-            "Mediation Analysis"
-        ])
-        
-        # Render content for each tab
-        with tab1:
-            self._render_normality_tab()
-        
-        with tab2:
-            self._render_correlation_tab()
-        
-        with tab3:
-            self._render_statistical_tab()
-        
-        with tab4:
-            self._render_regression_tab()
-        
-        with tab5:
-            self._render_mediation_tab()
 
 
 if __name__ == "__main__":
