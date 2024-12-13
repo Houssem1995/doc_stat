@@ -26,28 +26,31 @@ class MediationResult:
     sobel_p: float
     independent_var: str
     method: str
+    mediator: str
 
 class MediationAnalyzer:
     @staticmethod
     def perform_multiple_mediations(data: pd.DataFrame,
                                   independent_vars: list[str],
-                                  mediator: str,
+                                  mediators: list[str],
                                   dependent_var: str,
                                   method: MediationMethod = MediationMethod.STATSMODELS,
                                   confidence_level: float = 0.95,
-                                  n_bootstrap: int = 5000) -> dict[str, MediationResult]:
-        """Perform mediation analysis for multiple independent variables."""
+                                  n_bootstrap: int = 5000) -> dict[str, dict[str, MediationResult]]:
+        """Perform mediation analysis for multiple independent variables and mediators."""
         results = {}
         for iv in independent_vars:
-            results[iv] = MediationAnalyzer.perform_mediation(
-                data=data,
-                independent_var=iv,
-                mediator=mediator,
-                dependent_var=dependent_var,
-                method=method,
-                confidence_level=confidence_level,
-                n_bootstrap=n_bootstrap
-            )
+            results[iv] = {}
+            for mediator in mediators:
+                results[iv][mediator] = MediationAnalyzer.perform_mediation(
+                    data=data,
+                    independent_var=iv,
+                    mediator=mediator,
+                    dependent_var=dependent_var,
+                    method=method,
+                    confidence_level=confidence_level,
+                    n_bootstrap=n_bootstrap
+                )
         return results
 
     @staticmethod
@@ -141,7 +144,8 @@ class MediationAnalyzer:
             sobel_statistic=sobel_z,
             sobel_p=sobel_p,
             independent_var=independent_var,
-            method='statsmodels'
+            method='statsmodels',
+            mediator=mediator
         )
 
     @staticmethod
@@ -208,7 +212,8 @@ class MediationAnalyzer:
                     sobel_statistic=sobel_z,
                     sobel_p=indirect_p,
                     independent_var=independent_var,
-                    method='pingouin'
+                    method='pingouin',
+                    mediator=mediator
                 )
                 
             except Exception as e:

@@ -537,7 +537,7 @@ class DocStatApp:
                 st.exception(e)
 
     def _render_mediation_tab(self):
-        """Render the mediation analysis section."""
+        """Render the mediation analysis section with support for multiple mediators."""
         st.header("🔄 Mediation Analysis")
         
         if st.session_state.data is None:
@@ -551,26 +551,28 @@ class DocStatApp:
             help="Choose which statistical library to use for the mediation analysis"
         )
 
-        # Variable selection
+        # Variable selection with support for multiple mediators
         col1, col2, col3 = st.columns(3)
         with col1:
             independent_vars = st.multiselect(
                 "Independent Variable(s)",
                 options=st.session_state.data.columns.tolist(),
-                help="Select independent variable(s)"
+                help="Select one or more independent variables"
             )
         
         with col2:
-            mediator = st.selectbox(
-                "Mediator Variable",
-                options=st.session_state.data.columns.tolist(),
-                help="Select the mediator variable"
+            mediators = st.multiselect(  # Changed from selectbox to multiselect
+                "Mediator Variable(s)",   # Updated label
+                options=[col for col in st.session_state.data.columns.tolist() 
+                        if col not in independent_vars],
+                help="Select one or more mediator variables"
             )
         
         with col3:
             dependent_var = st.selectbox(
                 "Dependent Variable",
-                options=st.session_state.data.columns.tolist(),
+                options=[col for col in st.session_state.data.columns.tolist() 
+                        if col not in independent_vars and col not in mediators],
                 help="Select the dependent variable"
             )
 
@@ -597,13 +599,85 @@ class DocStatApp:
                     help="Set the number of bootstrap samples"
                 )
 
-        # After displaying results, add download options
-        def create_mediation_report(results: dict[str, MediationResult]) -> pd.DataFrame:
-            """Create a DataFrame with mediation analysis results."""
-            records = []
-            for iv, result in results.items():
+        # Run analysis button
+        if st.button("Run Mediation Analysis", type="primary"):
+            if not independent_vars or not mediators or not dependent_var:
+                st.warning("Please select all required variables.")
+                return
+            
+            try:
+                with st.spinner("Running mediation analysis..."):
+                    results = MediationAnalyzer.perform_multiple_mediations(
+                        data=st.session_state.data,
+                        independent_vars=independent_vars,
+                        mediators=mediators,
+                        dependent_var=dependent_var,
+                        method=MediationMethod(method),
+                        confidence_level=confidence_level,
+                        n_bootstrap=n_bootstrap
+                    )
+                    self._display_mediation_results(independent_vars, results)
+                    
+                    # Add download section
+                    self._download_mediation_results(results)
+                    
+            except Exception as e:
+                st.error(f"An error occurred during the analysis: {str(e)}")
+                st.exception(e)
+
+    def _display_mediation_results(self, independent_vars: list[str], results: dict[str, dict[str, MediationResult]]):
+        """Display the mediation analysis results in a formatted way."""
+        st.subheader("📊 Results")
+        
+        # Create tabs for each independent variable
+        iv_tabs = st.tabs(independent_vars)
+        
+        for iv, iv_tab in zip(results.keys(), iv_tabs):
+            with iv_tab:
+                st.markdown(f"### Results for Independent Variable: {iv}")
+                
+                # Create expanders for each mediator
+                for mediator, result in results[iv].items():
+                    with st.expander(f"Mediator: {mediator}", expanded=True):
+                        # Create three columns for organized display
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.markdown("#### Effect Sizes")
+                            st.write(f"Total Effect (c): {result.total_effect:.4f}")
+                            st.write(f"Direct Effect (c'): {result.direct_effect:.4f}")
+                            st.write(f"Indirect Effect (ab): {result.indirect_effect:.4f}")
+                        
+                        with col2:
+                            st.markdown("#### Statistical Tests")
+                            st.write(f"Total Effect p-value: {result.total_effect_p:.4f}")
+                            st.write(f"Direct Effect p-value: {result.direct_effect_p:.4f}")
+                            st.write(f"Sobel Test p-value: {result.sobel_p:.4f}")
+                        
+                        with col3:
+                            st.markdown("#### Additional Metrics")
+                            st.write(f"Proportion Mediated: {result.proportion_mediated:.2%}")
+                            st.write("Indirect Effect 95% CI:")
+                            st.write(f"- Lower: {result.indirect_effect_ci[0]:.4f}")
+                            st.write(f"- Upper: {result.indirect_effect_ci[1]:.4f}")
+                        
+                        # Add significance indicators
+                        if result.total_effect_p < 0.05:
+                            st.success("✓ Significant total effect detected")
+                        if result.indirect_effect_ci[0] * result.indirect_effect_ci[1] > 0:
+                            st.success("✓ Significant mediation effect detected")
+
+    def _download_mediation_results(self, results: dict[str, dict[str, MediationResult]]):
+        """Create download buttons for results in different formats."""
+        st.subheader("📥 Download Results")
+        
+        # Create DataFrame with all results
+        records = []
+        for iv, mediator_results in results.items():
+            for mediator, result in mediator_results.items():
                 record = {
                     'Independent Variable': iv,
+                    'Mediator': mediator,
                     'Method': result.method,
                     'Total Effect': result.total_effect,
                     'Direct Effect': result.direct_effect,
@@ -617,114 +691,45 @@ class DocStatApp:
                     'Sobel p-value': result.sobel_p
                 }
                 records.append(record)
-            return pd.DataFrame(records)
-
-        def download_results(results: dict[str, MediationResult]):
-            """Create download buttons for results in different formats."""
-            if not results:
-                return
-
-            st.subheader("📥 Download Results")
-            
-            # Create DataFrame
-            df_results = create_mediation_report(results)
-            
-            col1, col2 = st.columns(2)
-            
-            # CSV download
-            with col1:
-                csv = df_results.to_csv(index=False)
-                st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name="mediation_analysis_results.csv",
-                    mime="text/csv",
-                    help="Download the results as a CSV file"
-                )
-            
-            # Excel download
-            with col2:
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    df_results.to_excel(writer, sheet_name='Mediation Results', index=False)
-                    
-                    # Auto-adjust column widths
-                    worksheet = writer.sheets['Mediation Results']
-                    for idx, col in enumerate(df_results.columns):
-                        max_length = max(
-                            df_results[col].astype(str).apply(len).max(),
-                            len(str(col))
-                        ) + 2
-                        worksheet.column_dimensions[get_column_letter(idx + 1)].width = max_length
-                
-                excel_data = buffer.getvalue()
-                st.download_button(
-                    label="Download Excel",
-                    data=excel_data,
-                    file_name="mediation_analysis_results.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    help="Download the results as an Excel file"
-                )
-
-        # Run analysis button
-        if st.button("Run Mediation Analysis", type="primary"):
-            if not independent_vars or not mediator or not dependent_var:
-                st.warning("Please select all required variables.")
-                return
-            
-            try:
-                with st.spinner("Running mediation analysis..."):
-                    results = MediationAnalyzer.perform_multiple_mediations(
-                        data=st.session_state.data,
-                        independent_vars=independent_vars,
-                        mediator=mediator,
-                        dependent_var=dependent_var,
-                        method=MediationMethod(method),
-                        confidence_level=confidence_level,
-                        n_bootstrap=n_bootstrap
-                    )
-                    self._display_mediation_results(results)
-                    
-                    # Add download section
-                    download_results(results)
-                    
-            except Exception as e:
-                st.error(f"An error occurred during the analysis: {str(e)}")
-                st.exception(e)
-
-    def _display_mediation_results(self, results: dict[str, MediationResult]):
-        """Display the mediation analysis results in a formatted way."""
-        st.subheader("📊 Results")
         
-        for iv, result in results.items():
-            with st.expander(f"Results for {iv}", expanded=True):
-                # Create three columns for organized display
-                col1, col2, col3 = st.columns(3)
+        df_results = pd.DataFrame(records)
+        
+        col1, col2 = st.columns(2)
+        
+        # CSV download
+        with col1:
+            csv = df_results.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name="mediation_analysis_results.csv",
+                mime="text/csv",
+                help="Download the results as a CSV file"
+            )
+        
+        # Excel download
+        with col2:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_results.to_excel(writer, sheet_name='Mediation Results', index=False)
                 
-                with col1:
-                    st.markdown("#### Effect Sizes")
-                    st.write(f"Total Effect (c): {result.total_effect:.4f}")
-                    st.write(f"Direct Effect (c'): {result.direct_effect:.4f}")
-                    st.write(f"Indirect Effect (ab): {result.indirect_effect:.4f}")
-                
-                with col2:
-                    st.markdown("#### Statistical Tests")
-                    st.write(f"Total Effect p-value: {result.total_effect_p:.4f}")
-                    st.write(f"Direct Effect p-value: {result.direct_effect_p:.4f}")
-                    st.write(f"Sobel Test p-value: {result.sobel_p:.4f}")
-                
-                with col3:
-                    st.markdown("#### Additional Metrics")
-                    st.write(f"Proportion Mediated: {result.proportion_mediated:.2%}")
-                    st.write("Indirect Effect 95% CI:")
-                    st.write(f"- Lower: {result.indirect_effect_ci[0]:.4f}")
-                    st.write(f"- Upper: {result.indirect_effect_ci[1]:.4f}")
-                
-                # Add significance indicators
-                if result.total_effect_p < 0.05:
-                    st.success("✓ Significant total effect detected")
-                if result.indirect_effect_ci[0] * result.indirect_effect_ci[1] > 0:
-                    st.success("✓ Significant mediation effect detected")
+                # Auto-adjust column widths
+                worksheet = writer.sheets['Mediation Results']
+                for idx, col in enumerate(df_results.columns):
+                    max_length = max(
+                        df_results[col].astype(str).apply(len).max(),
+                        len(str(col))
+                    ) + 2
+                    worksheet.column_dimensions[get_column_letter(idx + 1)].width = max_length
+            
+            excel_data = buffer.getvalue()
+            st.download_button(
+                label="Download Excel",
+                data=excel_data,
+                file_name="mediation_analysis_results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Download the results as an Excel file"
+            )
 
     def _render_main_content(self):
         """Render the main content with all analysis tabs."""
