@@ -18,6 +18,7 @@ import io
 from openpyxl.utils import get_column_letter
 from src.analysis.sensitivity import SensitivityAnalyzer
 from src.analysis.synthetic_control import SyntheticControlAnalyzer
+from plot_builder import PlotBuilder
 
 
 class DocStatApp:
@@ -768,13 +769,14 @@ class DocStatApp:
                 # Auto-adjust column widths
                 worksheet = writer.sheets["Mediation Results"]
                 for idx, col in enumerate(df_results.columns):
-                    max_length = (
+                    max_length = ((
                         max(df_results[col].astype(str).apply(len).max(), len(str(col)))
+                        )
                         + 2
                     )
-                    worksheet.column_dimensions[get_column_letter(idx + 1)].width = (
-                        max_length
-                    )
+                worksheet.column_dimensions[get_column_letter(idx + 1)].width = (
+                    max_length
+                )
 
             excel_data = buffer.getvalue()
             st.download_button(
@@ -806,7 +808,7 @@ class DocStatApp:
 
     def _render_main_content(self):
         """Render the main content with all analysis tabs."""
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
             [
                 "Summary Statistics",
                 "Normality Analysis",
@@ -816,9 +818,10 @@ class DocStatApp:
                 "Mediation Analysis",
                 "Sensitivity Analysis",
                 "Synthetic Control",
+                "Plot Builder",  # Added new plotting tab
             ],
         )
-        with tab1:  # Render the new summary statistics tab
+        with tab1:
             self._render_summary_statistics_tab()
         with tab2:
             self._render_normality_tab()
@@ -834,6 +837,8 @@ class DocStatApp:
             self._render_sensitivity_tab()
         with tab8:
             self._render_synthetic_control_tab()
+        with tab9:  # Added the new tab handler
+            self._render_plotting_tab()
 
     def _render_sensitivity_tab(self):
         """Render the sensitivity analysis tab."""
@@ -1193,6 +1198,11 @@ class DocStatApp:
                 except Exception as e:
                     st.error(f"Error during synthetic control analysis: {str(e)}")
                     st.exception(e)
+
+    def _render_plotting_tab(self):
+        """Render the custom plotting tab with various visualization options."""
+        plot_builder = PlotBuilder()
+        plot_builder.render_plotting_tab(st.session_state.data)
 
     def run(self):
         st.title("DocStat: Statistical Analysis Tool")
