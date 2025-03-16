@@ -40,7 +40,11 @@ class PlotBuilder:
         # Plot mode selection
         plot_mode = st.radio(
             "Select Plot Mode",
-            options=["Two-Variable Plots", "Single-Variable Categorical Plots", "Single-Variable Numeric Plots"],
+            options=[
+                "Two-Variable Plots",
+                "Single-Variable Categorical Plots",
+                "Single-Variable Numeric Plots",
+            ],
             horizontal=True,
         )
 
@@ -691,106 +695,93 @@ class PlotBuilder:
 
     def _render_single_variable_categorical_plots(self, data, categorical_cols):
         """Render the interface for single-variable categorical plots."""
-        # Variable selection for single variable plots
-        st.subheader("1. Select Variable")
+        st.subheader("Select a Categorical Variable")
         categorical_var = st.selectbox(
-            "Select Categorical Variable",
-            categorical_cols,
-            help="Variable to analyze",
-            key="plot_categorical_var",
+            "Choose Variable", categorical_cols, key="categorical_var"
         )
 
-        if not categorical_var:
-            st.info("Please select a categorical variable to create a plot.")
-            return
+        # Add mapping functionality
+        st.subheader("Category Mapping")
+        use_mapping = st.checkbox(
+            "Use category mapping", value=False, key="use_mapping"
+        )
 
-        # Plot type selection for categorical variables
-        st.subheader("2. Select Plot Type")
-        cat_plot_types = ["Count Plot", "Pie Chart", "Donut Chart", "Bar Chart"]
-        cat_plot_type = st.selectbox(
-            "Select plot type", cat_plot_types, key="plot_type_cat_var"
+        mapping_dict = {}
+        if use_mapping:
+            unique_values = sorted(data[categorical_var].unique())
+            st.write("Define mappings for each category:")
+
+            # Create two columns for better layout
+            cols = st.columns(2)
+            for idx, val in enumerate(unique_values):
+                # Alternate between columns
+                with cols[idx % 2]:
+                    mapped_value = st.text_input(
+                        f"Label for {val}",
+                        value=str(val),
+                        key=f"mapping_{categorical_var}_{val}",
+                    )
+                    mapping_dict[val] = mapped_value
+
+        plot_type = st.selectbox(
+            "Select Plot Type",
+            ["Bar Chart", "Pie Chart", "Donut Chart"],
+            key="categorical_plot_type",
         )
 
         # Plot customization options
-        st.subheader("3. Customize Plot")
-
         with st.expander("Visual Customization", expanded=True):
             col1, col2 = st.columns(2)
 
             with col1:
-                # Get unique categories for the selected variable
-                unique_categories = data[categorical_var].unique()
-
-                # Color customization for each category
+                # Color options
                 use_custom_colors = st.checkbox(
                     "Use custom colors", value=False, key="use_custom_colors_cat"
                 )
-                category_colors = {}
 
                 if use_custom_colors:
-                    st.write("Select color for each category:")
-                    default_colors = (
-                        px.colors.qualitative.Plotly
-                    )  # Default Plotly color sequence
+                    unique_values = sorted(data[categorical_var].unique())
+                    category_colors = {}
+                    for val in unique_values:
+                        display_val = mapping_dict.get(val, val) if use_mapping else val
+                        category_colors[val] = st.color_picker(
+                            f"Color for {display_val}",
+                            key=f"color_{categorical_var}_{val}",
+                        )
 
-                    # Create color pickers for each category with a scrollable container if there are many
-                    if len(unique_categories) > 5:
-                        with st.container():
-                            for i, category in enumerate(unique_categories):
-                                category_colors[category] = st.color_picker(
-                                    f"{category}",
-                                    default_colors[i % len(default_colors)],
-                                    key=f"color_picker_cat_{i}",
-                                )
-                    else:
-                        for i, category in enumerate(unique_categories):
-                            category_colors[category] = st.color_picker(
-                                f"{category}",
-                                default_colors[i % len(default_colors)],
-                                key=f"color_picker_cat_{i}",
-                            )
-
-                # Show percentages option
                 show_percentages = st.checkbox(
                     "Show percentages",
-                    value=True,
+                    value=False,
                     help="Display percentage values on the plot",
                     key="show_percentages_cat",
                 )
 
             with col2:
-                # Title and labels
-                plot_title = st.text_input(
-                    "Plot title",
-                    f"Distribution of {categorical_var}",
-                    key="plot_title_cat",
-                )
-
-                # Sort options
-                sort_values = st.checkbox(
-                    "Sort by frequency", value=True, key="sort_values_cat"
-                )
-
-                # Figure size
+                plot_title = st.text_input("Plot title", "", key="plot_title_cat")
                 fig_width = st.slider("Figure width", 6, 20, 10, key="fig_width_cat")
                 fig_height = st.slider("Figure height", 4, 15, 6, key="fig_height_cat")
 
-        # Generate the plot button for categorical mode
         if st.button("Generate Plot", type="primary", key="generate_plot_cat"):
-            self._generate_single_variable_plot(
-                data,
+            # Apply mapping to data if enabled
+            plot_data = data.copy()
+            if use_mapping:
+                plot_data[categorical_var] = plot_data[categorical_var].map(
+                    mapping_dict
+                )
+
+            self._generate_single_variable_categorical_plot(
+                plot_data,
                 categorical_var,
-                cat_plot_type,
+                plot_type,
                 use_custom_colors,
-                category_colors,
+                category_colors if use_custom_colors else None,
                 show_percentages,
                 plot_title,
-                sort_values,
                 fig_width,
                 fig_height,
             )
 
-    def _generate_single_variable_plot(
+    def _generate_single_variable_categorical_plot(
         self,
         data,
         categorical_var,
@@ -799,7 +790,6 @@ class PlotBuilder:
         category_colors,
         show_percentages,
         plot_title,
-        sort_values,
         fig_width,
         fig_height,
     ):
@@ -809,10 +799,6 @@ class PlotBuilder:
         try:
             # Get category counts
             value_counts = data[categorical_var].value_counts()
-
-            # Sort if requested
-            if sort_values:
-                value_counts = value_counts.sort_values(ascending=False)
 
             # Create different plot types for categorical variables
             if cat_plot_type == "Count Plot":
